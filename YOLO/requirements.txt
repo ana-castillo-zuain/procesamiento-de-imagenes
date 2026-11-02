@@ -1,0 +1,2 @@
+# yolo26n.pt requiere ultralytics>=8.4.198
+ultralytics>=8.4.198
