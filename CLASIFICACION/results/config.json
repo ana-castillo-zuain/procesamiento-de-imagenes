@@ -1,0 +1,14 @@
+{
+  "dataset_dir": "C:\\Users\\anapa\\OneDrive\\Escritorio\\facu\\procesamiento-de-imagenes\\data\\yolo",
+  "results_dir": "C:\\Users\\anapa\\OneDrive\\Escritorio\\facu\\procesamiento-de-imagenes\\CLASIFICACION\\results",
+  "image_size": 224,
+  "batch_size": 32,
+  "head_epochs": 10,
+  "fine_tune_epochs": 15,
+  "seed": 42,
+  "workers": 2,
+  "learning_rate": 0.001,
+  "fine_tune_learning_rate": 1e-05,
+  "dropout": 0.2,
+  "patience": 5
+}
