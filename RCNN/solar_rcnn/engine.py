@@ -282,6 +282,8 @@ def run_one(config: Config, inventory, architecture: str, strategy: str, device:
         model = build_model(architecture, strategy, config.imgsz)
         counts = assert_freeze_state(model, architecture, strategy)
         LOGGER.info("Congelamiento verificado: %d parámetros entrenables, %d congelados.", counts["trainable"], counts["frozen"])
+        row["params_trainable"] = counts["trainable"]
+        row["params_frozen"] = counts["frozen"]
         model.roi_heads.score_thresh = config.eval_score_thresh
         model.to(device)
 
