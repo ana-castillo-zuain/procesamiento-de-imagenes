@@ -84,6 +84,35 @@ Cada imagen recibe como score su confianza máxima de detección. F1 macro de "t
 - **El mAP de validación oscila mucho entre épocas.** En la ResNet50 `full` del fold 1 da 0.466 en la época 6, 0.287 en la 9 y 0.465 en la 12. La variación típica de una época a la siguiente es de 0.02 a 0.05 en la ResNet50 y de 0.01 a 0.03 en la MobileNet.
 - **El learning rate casi nunca llegó a bajar.** El coseno está pensado para 50 épocas y las corridas pararon entre la 15 y la 26. En 16 de las 18, el learning rate todavía estaba entre el 30 % y el 80 % del máximo. Ningún modelo pasó por la fase de learning rate bajo, que es la que suele estabilizar el mAP.
 
+### Curvas de entrenamiento
+
+![Loss de train y mAP50-95 de validación por época](figuras/curvas_entrenamiento.png)
+
+Las filas son las dos arquitecturas (loss de train y mAP de validación de cada una). Las columnas son las estrategias y hay una línea por fold. El marcador indica la época que quedó como `best.pt`.
+
+No hay curva de loss de validación. El Faster R-CNN de torchvision, en modo evaluación, devuelve detecciones y no pérdidas, así que cada época se valida con mAP. YOLO sí informa loss de validación, y al compararlos hay que tenerlo en cuenta.
+
+- **ResNet50: ajusta el train, pero la validación se estanca.** La loss de train baja todo el tiempo, de ~1.0 a 0.1–0.2. El mAP de validación deja de mejorar hacia la época 5 y después oscila; en el fold 3 incluso cae desde la época 6. Es sobreajuste a las fuentes de train, o la brecha de dominio entre fuentes. Encaja con que el early stopping cortara temprano.
+- **MobileNetV3: la loss de train sube.** Pasa de ~0.6 a ~1.0 al terminar el warmup y queda ahí, en las tres estrategias, mientras el mAP de validación sí mejora.
+
+### Por qué sube la loss de la MobileNet
+
+![Componentes de la loss de train](figuras/componentes_loss.png)
+
+La loss total de Faster R-CNN es la suma de cuatro componentes. Se miraron en tres corridas:
+
+| Corrida | Cajas ROI (época 1 → última) | Clasificador ROI | Objectness RPN | Cajas RPN |
+|---|---|---|---|---|
+| MobileNetV3 `full`, fold 2 | **0.27 → 0.63** | 0.31 → 0.25 | 0.17 → 0.03 | 0.05 → 0.02 |
+| MobileNetV3 `backbone`, fold 1 | **0.08 → 0.31** | 0.23 → 0.17 | 0.08 → 0.02 | 0.01 → 0.005 |
+| ResNet50 `full`, fold 2 | 0.32 → 0.08 | 0.23 → 0.04 | 0.30 → 0.01 | 0.13 → 0.05 |
+
+- **Sube un solo componente, la regresión de cajas del cabezal ROI.** Los otros tres bajan con normalidad. No es inestabilidad por un learning rate alto: en ese caso subirían o saltarían todos. La suba además empieza en la época 2, cuando el warmup todavía tiene el learning rate en un tercio del máximo.
+- **La suba es un efecto de cómo se calcula esa loss.** torchvision suma el error de cajas solo sobre las propuestas que caen en un panel, pero lo divide por el total de propuestas muestreadas. Al principio la RPN de la MobileNet casi no genera propuestas positivas y la loss sale baja. A medida que aprende aparecen más, y la loss sube aunque el modelo mejore.
+- **Lo que importa es dónde se estabiliza: la MobileNet subajusta.** Su regresión de cajas queda en 0.63, contra 0.08 de la ResNet50: no logra ajustar las cajas ni siquiera en el train. Con features de stride 32 (la grilla de 8 × 8) no tiene resolución para ubicar con precisión paneles de pocos píxeles. Es coherente con su mAP50-95 bajo.
+
+Las dos arquitecturas fallan de forma opuesta. **La MobileNetV3 subajusta por falta de resolución espacial**, un límite de la arquitectura y no de la receta. **La ResNet50 ajusta el train pero no generaliza a la fuente nueva.** Que un learning rate más bajo mejore algo a la MobileNet no se puede descartar sin re-entrenarla, pero las curvas no muestran señales de que ese sea el problema.
+
 ## Limitaciones
 
 - **`best.pt` es optimista.** Se elige la mejor época sobre la misma validación que después se informa, y con esa oscilación el máximo incluye algo de suerte. YOLO elige `best.pt` de la misma forma, así que la comparación entre familias es pareja en esto. Aun así, las diferencias chicas no se pueden leer como reales.
@@ -94,6 +123,6 @@ Cada imagen recibe como score su confianza máxima de detección. F1 macro de "t
 ## Conclusiones para el informe
 
 1. Dentro de la familia R-CNN, la mejor configuración es **ResNet50 FPN con `partial` o `full`**, alrededor de 0.33 de mAP50-95 macro. Entre las dos no hay ganador claro.
-2. La **MobileNetV3 FPN de torchvision no sirve a 256 px**: su FPN no tiene resolución para paneles chicos.
+2. La **MobileNetV3 FPN de torchvision no sirve a 256 px**: su FPN no tiene resolución para paneles chicos. Subajusta: no logra ajustar las cajas ni siquiera en el train.
 3. **Congelar todo el extractor empeora** en las dos redes. Ajustar las features de COCO vale la pena.
 4. **Generalizar a fuentes nuevas sigue siendo difícil**: el fold 3 no pasa de 0.20. Y la ResNet50 genera muchos falsos positivos en imágenes sin paneles, salvo que se le suba el umbral.
