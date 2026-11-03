@@ -128,8 +128,9 @@ Los `best.pt` son un `state_dict` con metadatos. Para cargarlos: `build_model(ar
 
 ## Archivos
 
+- `RESULTADOS.md`: tablas y análisis de las 18 corridas.
 - `train.py`: entrada de línea de comandos.
-- `entrenamiento_colab.ipynb`: monta Drive, revisa CUDA y llama al motor.
+- `entrenamiento_colab.ipynb`: monta Drive, revisa CUDA y llama al motor. Está guardado con las salidas de la corrida completa.
 - `solar_rcnn/config.py`: parámetros comunes.
 - `solar_rcnn/architectures.py`: modelos, cabeza y congelamiento.
 - `solar_rcnn/dataset.py`: lee las etiquetas YOLO para torchvision.
