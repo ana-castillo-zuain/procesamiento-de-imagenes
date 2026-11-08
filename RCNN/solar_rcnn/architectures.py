@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from solar_rcnn.config import ANCHOR_PRESETS
+
 
 # torchvision reserva la clase 0 para el fondo. Panel es la 1.
 NUM_CLASSES = 2
@@ -181,11 +183,21 @@ def freeze_plan() -> dict:
     }
 
 
-def build_model(architecture: str, strategy: str, imgsz: int):
-    """Faster R-CNN con pesos de COCO y la cabeza cambiada a fondo + panel."""
-    from torchvision.models import detection
-    from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+def build_model(architecture: str, strategy: str, imgsz: int, anchors: str = "coco"):
+    """Faster R-CNN con pesos de COCO y la cabeza cambiada a fondo + panel.
 
+    Con ``anchors`` distinto de "coco" se reemplazan las anclas de la RPN y,
+    como cambia la cantidad de anclas por posición, también las dos capas de
+    salida de la cabeza de la RPN. Su convolución compartida conserva los pesos
+    de COCO; ``cls_logits`` y ``bbox_pred`` arrancan de cero.
+    """
+    from torchvision.models import detection
+    from torchvision.models.detection.anchor_utils import AnchorGenerator
+    from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+    from torchvision.models.detection.rpn import RPNHead
+
+    if anchors not in ANCHOR_PRESETS:
+        raise ArchitectureError(f"Anclas desconocidas: {anchors}. Válidas: {list(ANCHOR_PRESETS)}.")
     spec = ARCHITECTURES[architecture]
     builder = getattr(detection, spec.builder)
     weights = getattr(detection, spec.weights_enum).COCO_V1
@@ -197,6 +209,23 @@ def build_model(architecture: str, strategy: str, imgsz: int):
     )
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, NUM_CLASSES)
+
+    preset = ANCHOR_PRESETS[anchors]
+    if preset is not None:
+        n_levels = len(model.rpn.anchor_generator.sizes)
+        sizes = preset["sizes"]
+        # La ResNet50 tiene un nivel del FPN por tamaño. La MobileNet tiene 3
+        # niveles y torchvision pone todos los tamaños en cada uno; se respeta.
+        if n_levels == len(sizes):
+            level_sizes = tuple((size,) for size in sizes)
+        else:
+            level_sizes = (tuple(sizes),) * n_levels
+        generator = AnchorGenerator(level_sizes, (tuple(preset["aspect_ratios"]),) * n_levels)
+        old_head = model.rpn.head
+        new_head = RPNHead(model.backbone.out_channels, generator.num_anchors_per_location()[0])
+        new_head.conv.load_state_dict(old_head.conv.state_dict())
+        model.rpn.anchor_generator = generator
+        model.rpn.head = new_head
     return model
 
 

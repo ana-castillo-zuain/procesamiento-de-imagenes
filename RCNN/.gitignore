@@ -1,4 +1,7 @@
 results/
+results_anclas/
+results_ablacion/
+results_aumento/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

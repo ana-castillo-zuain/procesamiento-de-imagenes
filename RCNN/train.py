@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from solar_rcnn.architectures import ARCHITECTURES, STRATEGIES
-from solar_rcnn.config import Config, default_dataset_dir, default_results_dir
+from solar_rcnn.config import ANCHOR_PRESETS, AUGMENT_PRESETS, SHORT_SCHEDULE, Config, default_dataset_dir, default_results_dir
 from solar_rcnn.engine import run_experiments, verify_setup
 
 
@@ -31,6 +31,13 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--anchors", default="coco", choices=list(ANCHOR_PRESETS), help="Anclas de la RPN.")
+    parser.add_argument("--augment", default="volteos", choices=list(AUGMENT_PRESETS), help="Aumento de datos.")
+    parser.add_argument(
+        "--short-schedule",
+        action="store_true",
+        help=f"{SHORT_SCHEDULE['epochs']} épocas sin early stopping: el coseno llega a 0.",
+    )
     parser.add_argument(
         "--train",
         action="store_true",
@@ -43,10 +50,15 @@ def main() -> None:
 
     config = Config(
         dataset_dir=args.dataset or default_dataset_dir(),
-        results_dir=args.results or default_results_dir(),
+        results_dir=args.results or default_results_dir(args.anchors, args.augment, args.short_schedule),
         resume=not args.rerun,
         allow_cpu=args.allow_cpu,
+        anchors=args.anchors,
+        augment=args.augment,
     )
+    if args.short_schedule:
+        config.epochs = SHORT_SCHEDULE["epochs"]
+        config.patience = SHORT_SCHEDULE["patience"]
     if args.batch is not None:
         config.batch = args.batch
     if args.epochs is not None:

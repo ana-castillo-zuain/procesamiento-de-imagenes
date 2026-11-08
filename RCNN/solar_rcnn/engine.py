@@ -11,6 +11,7 @@ familias se comparan en una sola tabla.
 
 from __future__ import annotations
 
+import csv
 import logging
 import math
 import shutil
@@ -30,7 +31,7 @@ from solar_rcnn.architectures import (
     describe_architectures,
     freeze_plan,
 )
-from solar_rcnn.config import Config, ConfigError, estimated_iterations
+from solar_rcnn.config import ANCHOR_PRESETS, AUGMENT_PRESETS, Config, ConfigError, estimated_iterations
 from solar_rcnn.metrics import (
     best_threshold,
     classification_metrics,
@@ -90,6 +91,8 @@ EXPERIMENT_FIELDS = [
     "lr",
     "momentum",
     "weight_decay",
+    "anchors",
+    "augment",
     "estimated_iterations",
     "best_epoch",
     "epochs_ran",
@@ -162,9 +165,15 @@ def verify_setup(
     audit_architectures()
     if config.epochs < 1 or config.batch < 1 or config.patience < 1 or config.imgsz < 32:
         raise ConfigError("epochs, batch y patience tienen que ser enteros positivos, e imgsz al menos 32.")
+    if config.anchors not in ANCHOR_PRESETS:
+        raise ConfigError(f"Anclas desconocidas: {config.anchors}. Válidas: {list(ANCHOR_PRESETS)}.")
+    if config.augment not in AUGMENT_PRESETS:
+        raise ConfigError(f"Aumento desconocido: {config.augment}. Válidos: {list(AUGMENT_PRESETS)}.")
 
     inventories = inventory_dataset(config.dataset_dir)
     jobs = select_jobs(architectures, strategies, folds)
+    if config.resume:
+        _assert_reusable(config, jobs)
     iteration_lines = []
     for architecture, strategy, fold in jobs:
         n_train = len(inventories[fold].of("train"))
@@ -181,10 +190,82 @@ def verify_setup(
             (
                 f"SGD lr={config.lr} momentum={config.momentum} weight_decay={config.weight_decay}, "
                 f"warmup de {config.warmup_iters} iteraciones y coseno. batch={config.batch}, "
-                f"imgsz={config.imgsz} (min_size=max_size), epochs={config.epochs}, patience={config.patience}."
+                f"imgsz={config.imgsz} (min_size=max_size), epochs={config.epochs}, patience={config.patience}"
+                + (" (sin early stopping)" if config.patience >= config.epochs else "")
+                + "."
             ),
+            _describe_anchors(config.anchors),
+            _describe_augment(config),
         ]
     )
+
+
+def _stored_config_hash(results_dir: Path, exp_id: str) -> str | None:
+    """Hash de la configuración con la que se corrió un experimento terminado.
+
+    Las corridas anteriores a que el marcador guardara el hash lo tienen sólo
+    en ``experiments.csv``; se busca ahí como respaldo.
+    """
+    marker = read_marker(results_dir, exp_id) or {}
+    if marker.get("config_hash"):
+        return str(marker["config_hash"])
+    path = results_dir / "experiments.csv"
+    if path.is_file():
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("experiment_id") == exp_id and row.get("config_hash"):
+                    return row["config_hash"]
+    return None
+
+
+def _assert_reusable(config: Config, jobs) -> None:
+    """Impide reusar resultados corridos con otra configuración.
+
+    ``is_completed`` sólo mira el marcador y el ``best.pt``, y el ``exp_id`` es
+    arquitectura + estrategia + fold: no distingue dos configuraciones. Sin
+    esto, cambiar épocas o anclas y volver a correr sobre el mismo
+    ``results_dir`` saltea los experimentos y devuelve los números viejos como
+    si fueran los nuevos. Reentrenar tampoco sirve: pisaría los resultados
+    anteriores. Así que se corta y se pide una carpeta distinta.
+    """
+    current = config.config_hash(freeze_plan(), fold_definitions())
+    for architecture, strategy, fold in jobs:
+        exp_id = experiment_id(architecture, strategy, fold)
+        if not is_completed(config.results_dir, architecture, strategy, fold):
+            continue
+        stored = _stored_config_hash(config.results_dir, exp_id)
+        if stored is None:
+            LOGGER.warning(
+                "%s está terminado pero no guardó config_hash: no se puede comprobar "
+                "que sea la misma configuración. Se reusa igual.", exp_id
+            )
+        elif stored != current:
+            raise ConfigError(
+                f"{exp_id} ya está en {config.results_dir} pero se corrió con otra configuración "
+                f"(guardada {stored}, actual {current}). Reusarlo daría los números viejos y "
+                f"reentrenarlo pisaría los resultados anteriores. Usá otro results_dir, "
+                f"o --rerun si querés sobrescribir a propósito."
+            )
+
+
+def _describe_anchors(anchors: str) -> str:
+    preset = ANCHOR_PRESETS[anchors]
+    if preset is None:
+        return f"Anclas: {anchors}, las de torchvision (32 a 512 px; proporciones 0.5, 1 y 2)."
+    sizes = ", ".join(str(size) for size in preset["sizes"])
+    ratios = ", ".join(f"{ratio:g}" for ratio in preset["aspect_ratios"])
+    return (
+        f"Anclas: {anchors} ({sizes} px; proporciones alto/ancho {ratios}). "
+        "Las capas de salida de la RPN arrancan de cero."
+    )
+
+
+def _describe_augment(config: Config) -> str:
+    flips = [name for name, on in (("horizontal", config.hflip), ("vertical", config.vflip)) if on]
+    text = f"Aumento: {config.augment}. Volteo {' y '.join(flips) if flips else 'ninguno'}"
+    if config.augment == "fuerte":
+        text += ", rotación de 0/90/180/270 grados y cambios de brillo, contraste, saturación y tono"
+    return text + "."
 
 
 def run_experiments(
@@ -202,11 +283,12 @@ def run_experiments(
 
     ensure_result_dirs(config.results_dir)
     jobs = select_jobs(architectures, strategies, folds)
+    config_hash = config.config_hash(freeze_plan(), fold_definitions())
     write_config_snapshot(
         config.results_dir,
         {
             "config": config.to_json(),
-            "config_hash": config.config_hash(freeze_plan(), fold_definitions()),
+            "config_hash": config_hash,
             "freeze_plan": freeze_plan(),
             "folds": fold_definitions(),
             "jobs": [experiment_id(*job) for job in jobs],
@@ -279,7 +361,7 @@ def run_one(config: Config, inventory, architecture: str, strategy: str, device:
 
     try:
         set_seed(config.seed)
-        model = build_model(architecture, strategy, config.imgsz)
+        model = build_model(architecture, strategy, config.imgsz, config.anchors)
         counts = assert_freeze_state(model, architecture, strategy)
         LOGGER.info("Congelamiento verificado: %d parámetros entrenables, %d congelados.", counts["trainable"], counts["frozen"])
         row["params_trainable"] = counts["trainable"]
@@ -291,7 +373,9 @@ def run_one(config: Config, inventory, architecture: str, strategy: str, device:
         ground_truths = _ground_truths(val_records)
         generator = torch.Generator()
         train_loader = DataLoader(
-            PanelDataset(inventory.of("train"), train=True, hflip=config.hflip, vflip=config.vflip),
+            PanelDataset(
+                inventory.of("train"), train=True, hflip=config.hflip, vflip=config.vflip, augment=config.augment
+            ),
             batch_size=config.batch,
             shuffle=True,
             num_workers=config.workers,
@@ -458,7 +542,7 @@ def _evaluate_finished_run(
     )
     row["best_weights"] = str(stable_weights)
     try:
-        model = build_model(architecture, strategy, config.imgsz)
+        model = build_model(architecture, strategy, config.imgsz, config.anchors)
         checkpoint = torch.load(stable_weights, map_location="cpu", weights_only=False)
         if (checkpoint.get("architecture"), checkpoint.get("strategy")) != (architecture, strategy):
             raise ArchitectureError(
@@ -522,6 +606,7 @@ def _evaluate_finished_run(
                 "status": "completed",
                 "training_finished": True,
                 "experiment_id": exp_id,
+                "config_hash": config_hash,
                 "best_weights": str(stable_weights),
                 "predictions_dir": str(prediction_dir),
             },
@@ -925,6 +1010,8 @@ def _base_row(config: Config, inventory, architecture: str, strategy: str, confi
         "lr": config.lr,
         "momentum": config.momentum,
         "weight_decay": config.weight_decay,
+        "anchors": config.anchors,
+        "augment": config.augment,
         "estimated_iterations": iterations,
         "config_hash": config_hash,
         "run_dir": str(run_dir(config.results_dir, exp_id)),
