@@ -936,10 +936,15 @@ def _plot_history(history_path: Path, destination: Path, exp_id: str) -> None:
     axes[0].set_title("loss de entrenamiento", fontsize=9)
     axes[0].legend(fontsize=6)
     for key in ("map50", "map50_95"):
-        axes[1].plot(epochs, [float(row[key]) for row in rows], label=key, lw=1.2)
+        # El modelo final no tiene validación: esas columnas quedan vacías.
+        if rows and all(row.get(key) not in ("", None) for row in rows):
+            axes[1].plot(epochs, [float(row[key]) for row in rows], label=key, lw=1.2)
     axes[1].set_xlabel("época")
-    axes[1].set_title("validación", fontsize=9)
-    axes[1].legend(fontsize=7)
+    if axes[1].lines:
+        axes[1].set_title("validación", fontsize=9)
+        axes[1].legend(fontsize=7)
+    else:
+        axes[1].set_title("sin validación (entrenado con todo)", fontsize=9)
     for ax in axes:
         ax.grid(alpha=0.3)
     fig.suptitle(exp_id, fontsize=9)

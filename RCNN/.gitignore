@@ -2,6 +2,7 @@ results/
 results_anclas/
 results_ablacion/
 results_aumento/
+results_final/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

@@ -63,6 +63,15 @@ python train.py --train --anchors paneles --augment fuerte --short-schedule --ar
 python train.py --train --short-schedule --architectures fasterrcnn_resnet50_fpn --strategies partial  # ablación, opcional
 ```
 
+## Modelo final y test
+
+`final_test_colab.ipynb` entrena el modelo elegido para el test y lo evalúa. El mejor detector de la validación cruzada fue Faster R-CNN ResNet50 `partial`: 0.331 de mAP50-95 macro, contra 0.271 del mejor YOLO (YOLO26n con el backbone congelado), y ganó en los tres folds. Se usa su receta de la variante `aumento` (anclas `paneles`, aumento `fuerte`, 20 épocas fijas). Empató con la base en mAP50-95, tuvo mejor mAP50 y fue mejor como clasificador. Y, como no usa early stopping, se puede entrenar **una sola vez con las 900 imágenes** sin apartar una validación: el modelo final es el de la última época.
+
+- `solar_rcnn/final.py` tiene `train_final`, que entrena y reanuda desde `last.pt`, y `evaluate_test`, que predice una vez y escribe las métricas.
+- El test está en `data/test`: `etiquetas.csv` (con/sin) y `lote_1` a `lote_5` con las etiquetas YOLO. Son 200 imágenes: 125 con paneles, 75 sin y 178 cajas. Las etiquetas no coinciden con ninguna del dataset de entrenamiento. Cada imagen va al lado de su etiqueta (`lote_N/test_XXX.png`). Si se suben aparte a Drive (`MyDrive/paneles_resultados/test_imagenes`, con o sin las carpetas de lote), el notebook las ubica por nombre.
+- En el test no se elige nada: ni época ni umbral. Se informan mAP50, mAP50-95, precisión y recall (en total y por lote), las detecciones en imágenes sin paneles y el detector como clasificador con el umbral de 0.25, junto a la referencia de decir siempre que sí.
+- Los resultados quedan en `MyDrive/paneles_resultados/RCNN_final/final/`: `weights/final.pt` y `test/` con los CSV, `metrics.json`, la curva PR y las predicciones.
+
 ## Reanudar
 
 Funciona igual que en YOLO. Un experimento se considera terminado solo si `results/logs/<id>.json` dice `completed` y existe su `best.pt`. Esos no se vuelven a entrenar.
@@ -164,8 +173,10 @@ Los `best.pt` son un `state_dict` con metadatos. Para cargarlos: `build_model(ar
 - `train.py`: entrada de línea de comandos.
 - `entrenamiento_colab.ipynb`: monta Drive, revisa CUDA y llama al motor. Está guardado con las salidas de la corrida completa.
 - `entrenamiento_anclas_colab.ipynb`: las variantes con anclas ajustadas, 20 épocas y aumento fuerte.
+- `final_test_colab.ipynb`: el modelo final entrenado con las 900 imágenes y su evaluación en el test.
 - `solar_rcnn/config.py`: parámetros comunes.
 - `solar_rcnn/architectures.py`: modelos, cabeza y congelamiento.
+- `solar_rcnn/final.py`: entrenamiento con todo el dataset y evaluación en el test.
 - `solar_rcnn/dataset.py`: lee las etiquetas YOLO para torchvision y aplica el aumento.
 - `solar_rcnn/metrics.py`: mAP de COCO, curva PR y detector como clasificador.
 - `solar_rcnn/engine.py`: la grilla de 18, el bucle de entrenamiento, la reanudación y la evaluación.
