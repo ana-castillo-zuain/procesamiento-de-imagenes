@@ -145,6 +145,31 @@ Lo que se ve:
 
 En resumen: **el límite no está en las anclas, en el learning rate ni en el aumento, sino en la brecha de dominio entre fuentes.** El aumento es el único cambio con algún beneficio: mejor mAP50 y mejor detector como clasificador, con el mismo mAP50-95. Para confirmarlo harían falta varias semillas.
 
+## Test (modelo final)
+
+El mejor detector de la validación cruzada fue Faster R-CNN ResNet50 `partial`, con 0.331 de mAP50-95 macro contra 0.271 del mejor YOLO (YOLO26n `backbone`). Para el test se entrenó **un solo modelo con las 900 imágenes**, con la receta de la variante aumento: anclas `paneles`, aumento `fuerte` y 20 épocas fijas (`final_test_colab.ipynb`). Esa receta no usa early stopping, así que no hizo falta apartar una validación: el modelo es el de la última época. En el test no se eligió nada, ni época ni umbral.
+
+El test de la cátedra tiene 200 imágenes en 5 lotes: 125 con paneles, 75 sin y 178 cajas. Ninguna imagen está repetida en el dataset de entrenamiento, ni idéntica ni casi idéntica. Las 200 vienen con paleta de 256 colores (PNG "P"); en el entrenamiento, 868 de las 900 son RGB.
+
+| | mAP50-95 | mAP50 | Precisión | Recall | Imágenes sin paneles con alguna detección ≥ 0.25 |
+|---|---|---|---|---|---|
+| **Test (200 imágenes)** | **0.351** | **0.712** | 0.699 | 0.680 | 50 de 75 (96 cajas) |
+| Validación cruzada, misma receta (promedio de 3 folds) | 0.332 | 0.595 | 0.797 | 0.559 | — |
+
+Por lote, el mAP50-95 va de 0.287 (lote 3, el de más cajas: 46) a 0.483 (lote 2).
+
+Detector como clasificador, con el umbral de fábrica (0.25):
+
+| | TP | FP | FN | TN | Accuracy | F1 "con paneles" | **F1 macro** |
+|---|---|---|---|---|---|---|---|
+| Modelo final | 123 | 50 | 2 | 25 | 0.740 | 0.826 | **0.658** |
+| Decir siempre que sí | 125 | 75 | 0 | 0 | 0.625 | 0.769 | 0.385 |
+
+- **El rendimiento en el test confirma la validación cruzada.** 0.351 de mAP50-95 cae dentro del rango de los folds (0.211 a 0.411) y apenas por encima de su promedio. El modelo generaliza a imágenes nuevas como se esperaba. Probablemente ayudó entrenar con las 900 imágenes en lugar de dos tercios.
+- **El mAP50 es más alto que en la validación cruzada** (0.712 contra 0.595). Las cajas del test se parecen más a las de solarpanels_hd y kingston (alrededor de 1.4 cajas por imagen con paneles, lado típico de 40 px) que a las filas chicas y alargadas de PV01, que eran el caso más difícil.
+- **Casi no se le escapan imágenes con paneles.** Como clasificador detecta 123 de 125 y supera con claridad a la referencia trivial (F1 macro 0.658 contra 0.385).
+- **El punto débil son los falsos positivos.** En 50 de las 75 imágenes sin paneles hay alguna detección con confianza ≥ 0.25. Es el mismo comportamiento de la validación cruzada (kingston2): el umbral de 0.25 le queda bajo a este modelo. El punto de F1 máximo de la curva PR está en confianza 0.96, lo que indica que sus aciertos tienen confianza muy alta y los falsos positivos se concentran abajo. No se ajustó el umbral en el test para no sesgar el resultado. En la validación cruzada, el umbral calibrado cambiaba mucho entre folds (0.36 y 0.76 con aumento), así que tampoco había un valor confiable para fijar de antemano.
+
 ## Limitaciones
 
 - **`best.pt` es optimista.** Se elige la mejor época sobre la misma validación que después se informa, y con esa oscilación el máximo incluye algo de suerte. YOLO elige `best.pt` de la misma forma, así que la comparación entre familias es pareja en esto. Aun así, las diferencias chicas no se pueden leer como reales.
@@ -159,3 +184,4 @@ En resumen: **el límite no está en las anclas, en el learning rate ni en el au
 3. **Congelar todo el extractor empeora** en las dos redes. Ajustar las features de COCO vale la pena.
 4. **Generalizar a fuentes nuevas sigue siendo difícil**: el fold 3 no pasa de 0.20. Y la ResNet50 genera muchos falsos positivos en imágenes sin paneles, salvo que se le suba el umbral.
 5. **Las mejoras probadas no superan a la base en mAP50-95**: ni las anclas ajustadas, ni las 20 épocas, ni el aumento de datos. El aumento sube el mAP50 (0.595 contra 0.566) y mejora el detector como clasificador; las anclas solas aumentan los falsos positivos. El cuello de botella es la brecha de dominio entre fuentes.
+6. **En el test, el modelo final (ResNet50 `partial` con anclas ajustadas y aumento, entrenado con las 900 imágenes) logra 0.351 de mAP50-95 y 0.712 de mAP50**, en línea con la validación cruzada. Como clasificador encuentra 123 de 125 imágenes con paneles (F1 macro 0.658 contra 0.385 de la referencia trivial), pero con el umbral de 0.25 marca paneles en 50 de las 75 imágenes vacías.
