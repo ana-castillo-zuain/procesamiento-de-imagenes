@@ -1,0 +1,2 @@
+model_name,test_accuracy,test_balanced_accuracy,test_precision,test_recall,test_f1_score,true_negatives,false_positives,false_negatives,true_positives
+EfficientNetB0_Sequential_FineTuning,0.555,0.5666666666666667,0.6914893617021277,0.52,0.593607305936073,46,29,60,65

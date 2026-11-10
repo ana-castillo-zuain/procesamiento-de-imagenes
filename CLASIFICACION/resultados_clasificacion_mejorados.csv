@@ -1,0 +1,9 @@
+model_name,accuracy,precision,recall,f1_score,confusion_matrix
+MobileNetV2_improved_pretrained,0.10666666666666667,1.0,0.007407407407407408,0.014705882352941176,"[[ 90   0]
+ [804   6]]"
+MobileNetV2_improved_scratch,0.9,0.9,1.0,0.9473684210526315,"[[  0  90]
+ [  0 810]]"
+EfficientNetB0_improved_pretrained,0.8577777777777778,0.9942028985507246,0.8469135802469135,0.9146666666666666,"[[ 86   4]
+ [124 686]]"
+EfficientNetB0_improved_scratch,0.9,0.9,1.0,0.9473684210526315,"[[  0  90]
+ [  0 810]]"

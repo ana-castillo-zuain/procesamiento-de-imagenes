@@ -1,0 +1,2 @@
+model_name,test_accuracy,test_precision,test_recall,test_f1_score,true_negatives,false_positives,false_negatives,true_positives
+EfficientNetB0_Ultra_Robust_Pretrained,0.5,0.654320987654321,0.424,0.5145631067961165,47,28,72,53
