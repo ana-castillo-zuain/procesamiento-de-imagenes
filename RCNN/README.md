@@ -32,6 +32,46 @@ python train.py
 python train.py --train --architectures fasterrcnn_mobilenet_v3_large_fpn --strategies partial --folds 1
 ```
 
+## Variantes: anclas ajustadas, 20 épocas y aumento
+
+`entrenamiento_anclas_colab.ipynb` reentrena la mejor configuración de la base, ResNet50 `partial` (mAP50-95 macro 0.331), en los 3 folds, con tres cambios. `full` empataba con ella (0.325, dentro del ruido entre épocas), así que no se repite. Lo demás queda igual: folds, congelamiento, optimizador y métricas.
+
+- **Anclas `paneles`** (`ANCHOR_PRESETS` en `config.py`): tamaños de 16 a 256 px y proporciones alto/ancho 0.25, 0.5, 1, 2 y 4.
+  - Las de torchvision van de 32 a 512 px, con proporciones de 0.5 a 2. Así, el 27 % de las cajas (30 % en PV01) no tiene ningún ancla con IoU ≥ 0.5: una de cada cuatro cajas mide menos de 32 px, y un tercio de las de PV01 son filas de más de 3:1. Con las anclas nuevas queda el 8 %.
+  - Como cambia la cantidad de anclas por posición, se reemplazan las dos capas de salida de la RPN, que arrancan de cero. Su convolución compartida conserva los pesos de COCO.
+- **20 épocas sin early stopping** (`SHORT_SCHEDULE`): el coseno llega a 0 en la última época. En la base, las corridas cortaban con el learning rate todavía entre el 30 % y el 80 % del máximo.
+- **Aumento `fuerte`** (`augment` en `config.py`, implementado en `dataset.py`): a los volteos les suma una rotación de 0, 90, 180 o 270 grados y cambios chicos de brillo, contraste, saturación y tono. Apunta a la brecha entre fuentes: en la base, la ResNet50 ajusta el train pero no generaliza a la fuente nueva.
+
+Para poder atribuir cada mejora, cada variante agrega un solo cambio sobre la anterior:
+
+| Variante | Anclas | Épocas | Aumento | Carpeta en Drive | Carpeta local |
+|---|---|---|---|---|---|
+| base (ya corrida) | coco | 50 con early stopping | volteos | `RCNN` | `results/` |
+| ablación (opcional) | coco | 20 sin early stopping | volteos | `RCNN_ablacion` | `results_ablacion/` |
+| anclas | paneles | 20 sin early stopping | volteos | `RCNN_anclas` | `results_anclas/` |
+| aumento | paneles | 20 sin early stopping | fuerte | `RCNN_aumento` | `results_aumento/` |
+
+Por defecto se corren anclas y aumento: 3 entrenamientos por variante, unos 30 minutos cada una en una T4, alrededor de una hora en total. *anclas − base* es el efecto conjunto de las anclas y las 20 épocas, y *aumento − anclas* el del aumento. La ablación separaría anclas de épocas (*ablación − base* y *anclas − ablación*), pero suma otra media hora y está apagada; se activa con `CORRER_ABLACION = True`. La última celda arma la tabla de atribución con lo que haya.
+
+Cada variante tiene su carpeta. Si una carpeta ya tiene resultados de otra configuración, la verificación corta con un error en vez de mezclarlos o pisarlos. Las opciones nuevas, en su valor por defecto, no entran al hash de la configuración: la base conserva el hash con el que se corrió (`7e384d65230492d6`).
+
+Desde una terminal:
+
+```bash
+python train.py --train --anchors paneles --short-schedule --architectures fasterrcnn_resnet50_fpn --strategies partial
+python train.py --train --anchors paneles --augment fuerte --short-schedule --architectures fasterrcnn_resnet50_fpn --strategies partial
+python train.py --train --short-schedule --architectures fasterrcnn_resnet50_fpn --strategies partial  # ablación, opcional
+```
+
+## Modelo final y test
+
+`final_test_colab.ipynb` entrena el modelo elegido para el test y lo evalúa. El mejor detector de la validación cruzada fue Faster R-CNN ResNet50 `partial`: 0.331 de mAP50-95 macro, contra 0.271 del mejor YOLO (YOLO26n con el backbone congelado), y ganó en los tres folds. Se usa su receta de la variante `aumento` (anclas `paneles`, aumento `fuerte`, 20 épocas fijas). Empató con la base en mAP50-95, tuvo mejor mAP50 y fue mejor como clasificador. Y, como no usa early stopping, se puede entrenar **una sola vez con las 900 imágenes** sin apartar una validación: el modelo final es el de la última época.
+
+- `solar_rcnn/final.py` tiene `train_final`, que entrena y reanuda desde `last.pt`, y `evaluate_test`, que predice una vez y escribe las métricas.
+- El test está en `data/test`: `etiquetas.csv` (con/sin) y `lote_1` a `lote_5` con las etiquetas YOLO. Son 200 imágenes: 125 con paneles, 75 sin y 178 cajas. Las etiquetas no coinciden con ninguna del dataset de entrenamiento. Cada imagen va al lado de su etiqueta (`lote_N/test_XXX.png`). Si se suben aparte a Drive (`MyDrive/paneles_resultados/test_imagenes`, con o sin las carpetas de lote), el notebook las ubica por nombre.
+- En el test no se elige nada: ni época ni umbral. Se informan mAP50, mAP50-95, precisión y recall (en total y por lote), las detecciones en imágenes sin paneles y el detector como clasificador con el umbral de 0.25, junto a la referencia de decir siempre que sí.
+- Los resultados quedan en `MyDrive/paneles_resultados/RCNN_final/final/`: `weights/final.pt` y `test/` con los CSV, `metrics.json`, la curva PR y las predicciones.
+
 ## Reanudar
 
 Funciona igual que en YOLO. Un experimento se considera terminado solo si `results/logs/<id>.json` dice `completed` y existe su `best.pt`. Esos no se vuelven a entrenar.
@@ -78,7 +118,7 @@ En `solar_rcnn/config.py`:
 - `batch=8`, `imgsz=256`, `seed=42`
 - SGD con `lr=0.01`, `momentum=0.9`, `weight_decay=1e-4`: es la receta de referencia de torchvision (0.02 para batch 16), escalada a batch 8
 - warmup lineal de 200 iteraciones y después coseno hasta 0
-- aumento: volteo horizontal y vertical. Son imágenes aéreas, así que no hay un "arriba" natural
+- aumento: volteo horizontal y vertical. Son imágenes aéreas, así que no hay un "arriba" natural. La variante `aumento` suma rotaciones y cambios de color (ver arriba)
 - AMP en GPU
 
 El `best.pt` es la época con mejor fitness (`0.1 * mAP50 + 0.9 * mAP50-95`), igual que en YOLO. Una época de validación es una predicción completa sobre el fold.
@@ -124,15 +164,19 @@ results/
 └── plots/<id>/                # curva precisión-recall y curvas de entrenamiento
 ```
 
-Los `best.pt` son un `state_dict` con metadatos. Para cargarlos: `build_model(arquitectura, estrategia, 256)` y después `model.load_state_dict(torch.load(ruta)["model"])`.
+Los `best.pt` son un `state_dict` con metadatos. Para cargarlos: `build_model(arquitectura, estrategia, 256)` y después `model.load_state_dict(torch.load(ruta)["model"])`. Los de la variante se cargan con `build_model(arquitectura, estrategia, 256, "paneles")`.
 
 ## Archivos
 
 - `RESULTADOS.md`: tablas y análisis de las 18 corridas.
+- `figuras/`: curvas de entrenamiento de las 18 corridas y componentes de la loss, usadas en `RESULTADOS.md`.
 - `train.py`: entrada de línea de comandos.
 - `entrenamiento_colab.ipynb`: monta Drive, revisa CUDA y llama al motor. Está guardado con las salidas de la corrida completa.
+- `entrenamiento_anclas_colab.ipynb`: las variantes con anclas ajustadas, 20 épocas y aumento fuerte.
+- `final_test_colab.ipynb`: el modelo final entrenado con las 900 imágenes y su evaluación en el test.
 - `solar_rcnn/config.py`: parámetros comunes.
 - `solar_rcnn/architectures.py`: modelos, cabeza y congelamiento.
-- `solar_rcnn/dataset.py`: lee las etiquetas YOLO para torchvision.
+- `solar_rcnn/final.py`: entrenamiento con todo el dataset y evaluación en el test.
+- `solar_rcnn/dataset.py`: lee las etiquetas YOLO para torchvision y aplica el aumento.
 - `solar_rcnn/metrics.py`: mAP de COCO, curva PR y detector como clasificador.
 - `solar_rcnn/engine.py`: la grilla de 18, el bucle de entrenamiento, la reanudación y la evaluación.

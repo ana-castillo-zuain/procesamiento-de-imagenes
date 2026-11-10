@@ -84,6 +84,67 @@ Cada imagen recibe como score su confianza máxima de detección. F1 macro de "t
 - **El mAP de validación oscila mucho entre épocas.** En la ResNet50 `full` del fold 1 da 0.466 en la época 6, 0.287 en la 9 y 0.465 en la 12. La variación típica de una época a la siguiente es de 0.02 a 0.05 en la ResNet50 y de 0.01 a 0.03 en la MobileNet.
 - **El learning rate casi nunca llegó a bajar.** El coseno está pensado para 50 épocas y las corridas pararon entre la 15 y la 26. En 16 de las 18, el learning rate todavía estaba entre el 30 % y el 80 % del máximo. Ningún modelo pasó por la fase de learning rate bajo, que es la que suele estabilizar el mAP.
 
+### Curvas de entrenamiento
+
+![Loss de train y mAP50-95 de validación por época](figuras/curvas_entrenamiento.png)
+
+Las filas son las dos arquitecturas (loss de train y mAP de validación de cada una). Las columnas son las estrategias y hay una línea por fold. El marcador indica la época que quedó como `best.pt`.
+
+No hay curva de loss de validación. El Faster R-CNN de torchvision, en modo evaluación, devuelve detecciones y no pérdidas, así que cada época se valida con mAP. YOLO sí informa loss de validación, y al compararlos hay que tenerlo en cuenta.
+
+- **ResNet50: ajusta el train, pero la validación se estanca.** La loss de train baja todo el tiempo, de ~1.0 a 0.1–0.2. El mAP de validación deja de mejorar hacia la época 5 y después oscila; en el fold 3 incluso cae desde la época 6. Es sobreajuste a las fuentes de train, o la brecha de dominio entre fuentes. Encaja con que el early stopping cortara temprano.
+- **MobileNetV3: la loss de train sube.** Pasa de ~0.6 a ~1.0 al terminar el warmup y queda ahí, en las tres estrategias, mientras el mAP de validación sí mejora.
+
+### Por qué sube la loss de la MobileNet
+
+![Componentes de la loss de train](figuras/componentes_loss.png)
+
+La loss total de Faster R-CNN es la suma de cuatro componentes. Se miraron en tres corridas:
+
+| Corrida | Cajas ROI (época 1 → última) | Clasificador ROI | Objectness RPN | Cajas RPN |
+|---|---|---|---|---|
+| MobileNetV3 `full`, fold 2 | **0.27 → 0.63** | 0.31 → 0.25 | 0.17 → 0.03 | 0.05 → 0.02 |
+| MobileNetV3 `backbone`, fold 1 | **0.08 → 0.31** | 0.23 → 0.17 | 0.08 → 0.02 | 0.01 → 0.005 |
+| ResNet50 `full`, fold 2 | 0.32 → 0.08 | 0.23 → 0.04 | 0.30 → 0.01 | 0.13 → 0.05 |
+
+- **Sube un solo componente, la regresión de cajas del cabezal ROI.** Los otros tres bajan con normalidad. No es inestabilidad por un learning rate alto: en ese caso subirían o saltarían todos. La suba además empieza en la época 2, cuando el warmup todavía tiene el learning rate en un tercio del máximo.
+- **La suba es un efecto de cómo se calcula esa loss.** torchvision suma el error de cajas solo sobre las propuestas que caen en un panel, pero lo divide por el total de propuestas muestreadas. Al principio la RPN de la MobileNet casi no genera propuestas positivas y la loss sale baja. A medida que aprende aparecen más, y la loss sube aunque el modelo mejore.
+- **Lo que importa es dónde se estabiliza: la MobileNet subajusta.** Su regresión de cajas queda en 0.63, contra 0.08 de la ResNet50: no logra ajustar las cajas ni siquiera en el train. Con features de stride 32 (la grilla de 8 × 8) no tiene resolución para ubicar con precisión paneles de pocos píxeles. Es coherente con su mAP50-95 bajo.
+
+Las dos arquitecturas fallan de forma opuesta. **La MobileNetV3 subajusta por falta de resolución espacial**, un límite de la arquitectura y no de la receta. **La ResNet50 ajusta el train pero no generaliza a la fuente nueva.** Que un learning rate más bajo mejore algo a la MobileNet no se puede descartar sin re-entrenarla, pero las curvas no muestran señales de que ese sea el problema.
+
+## Intentos de mejora
+
+Sobre la mejor configuración, ResNet50 `partial`, se probaron dos variantes motivadas por el análisis anterior (`entrenamiento_anclas_colab.ipynb`, detalles en el README):
+
+- **anclas**: anclas ajustadas a las cajas del dataset (16 a 256 px, proporciones de 0.25 a 4) y 20 épocas sin early stopping, para que el learning rate llegue a 0.
+- **aumento**: lo mismo, más rotaciones de 90° y cambios de brillo, contraste, saturación y tono.
+
+La ablación (anclas de COCO con 20 épocas) no se corrió. Por eso, *anclas − base* mezcla el efecto de las anclas con el de las épocas.
+
+| Variante | mAP50-95 f1 / f2 / f3 | **mAP50-95 macro** | mAP50 macro | Precisión / recall macro | Mejor época f1 / f2 / f3 |
+|---|---|---|---|---|---|
+| base | 0.436 / 0.351 / 0.204 | 0.331 | 0.566 | 0.759 / 0.534 | 12 / 5 / 6 |
+| anclas | 0.405 / 0.364 / 0.184 | 0.318 | 0.559 | 0.816 / 0.530 | 12 / 5 / 13 |
+| aumento | 0.411 / 0.372 / 0.211 | **0.332** | **0.595** | 0.797 / 0.559 | 17 / 5 / 5 |
+
+Falsos positivos y detector como clasificador (F1 macro con umbral de fábrica 0.25 y calibrado):
+
+| Variante | kingston2: imágenes / cajas FP | F1 macro fold 2 (fábrica / calibrado) | F1 macro fold 3 (fábrica / calibrado) |
+|---|---|---|---|
+| base | 23 / 56 | 0.557 / 0.698 | 0.465 / 0.757 |
+| anclas | **28 / 98** | 0.504 / 0.758 | **0.318** / 0.790 |
+| aumento | 20 / 66 | **0.608** / 0.767 | **0.521** / 0.778 |
+
+Lo que se ve:
+
+- **Ninguna variante mejora el mAP50-95 más allá del ruido.** Aumento empata con la base (0.332 contra 0.331) y anclas queda 0.013 abajo. El fold 2 mejora en las dos (+0.013 y +0.021), pero el fold 1 empeora (−0.025 a −0.031), justo el de PV01, para el que estaban pensadas las anclas. Una explicación probable: el fold 1 entrena con solo 579 cajas, y con las anclas nuevas las capas de salida de la RPN arrancan de cero. Con tan pocos ejemplos y 20 épocas no llegan a aprender bien.
+- **El aumento mejora el mAP50: 0.595 contra 0.566.** Suben el fold 2 (+0.044) y el fold 3 (+0.058). Encuentra más paneles en las fuentes nuevas, pero sin ajustar mejor las cajas, así que el mAP50-95 no se mueve.
+- **Las anclas solas empeoran los falsos positivos.** Con cinco veces más anclas por posición, y anclas de 16 px, el modelo detecta "paneles" en las 28 imágenes vacías de kingston2 (98 cajas). Con el umbral de fábrica, en el fold 3 el clasificador queda casi igual que decir siempre "sí" (0.318 contra 0.293). El aumento corrige buena parte de eso (20 imágenes, 66 cajas) y es la mejor variante como clasificador con el umbral de fábrica.
+- **El sobreajuste a las fuentes de train sigue.** En el fold 3 con aumento, el mejor mAP50-95 aparece en la época 5 (0.211) y baja hasta 0.159 en la época 20, aunque la loss de train sigue bajando. Terminar con el learning rate bajo no lo evita.
+
+En resumen: **el límite no está en las anclas, en el learning rate ni en el aumento, sino en la brecha de dominio entre fuentes.** El aumento es el único cambio con algún beneficio: mejor mAP50 y mejor detector como clasificador, con el mismo mAP50-95. Para confirmarlo harían falta varias semillas.
+
 ## Limitaciones
 
 - **`best.pt` es optimista.** Se elige la mejor época sobre la misma validación que después se informa, y con esa oscilación el máximo incluye algo de suerte. YOLO elige `best.pt` de la misma forma, así que la comparación entre familias es pareja en esto. Aun así, las diferencias chicas no se pueden leer como reales.
@@ -94,6 +155,7 @@ Cada imagen recibe como score su confianza máxima de detección. F1 macro de "t
 ## Conclusiones para el informe
 
 1. Dentro de la familia R-CNN, la mejor configuración es **ResNet50 FPN con `partial` o `full`**, alrededor de 0.33 de mAP50-95 macro. Entre las dos no hay ganador claro.
-2. La **MobileNetV3 FPN de torchvision no sirve a 256 px**: su FPN no tiene resolución para paneles chicos.
+2. La **MobileNetV3 FPN de torchvision no sirve a 256 px**: su FPN no tiene resolución para paneles chicos. Subajusta: no logra ajustar las cajas ni siquiera en el train.
 3. **Congelar todo el extractor empeora** en las dos redes. Ajustar las features de COCO vale la pena.
 4. **Generalizar a fuentes nuevas sigue siendo difícil**: el fold 3 no pasa de 0.20. Y la ResNet50 genera muchos falsos positivos en imágenes sin paneles, salvo que se le suba el umbral.
+5. **Las mejoras probadas no superan a la base en mAP50-95**: ni las anclas ajustadas, ni las 20 épocas, ni el aumento de datos. El aumento sube el mAP50 (0.595 contra 0.566) y mejora el detector como clasificador; las anclas solas aumentan los falsos positivos. El cuello de botella es la brecha de dominio entre fuentes.

@@ -167,10 +167,15 @@ Con estos tamaños, `auto` elige AdamW: Ultralytics pasa a MuSGD recién arriba 
 
 Si la GPU no entra en memoria, Ultralytics puede bajar el batch durante la primera época. La fila lo anota en `batch_used` y en `warning`. Conviene fijar un batch que entre y repetir el experimento, porque uno con el batch reducido no es comparable.
 
+## Visualización
+
+Notebook local (no Colab): con `results/` en `YOLO/results/`, abrí `visualizacion.ipynb`. Lee CSV, predicciones y plots (sin cargar modelos): detección (mAP, PR de cajas), clasificación imagen tiene/no tiene panel (TP/FP/TN/FN, F1), curvas loss y matrices de confusión. Necesita también `data/yolo` para las etiquetas GT.
+
 ## Archivos
 
 - `train.py`: entrada de línea de comandos.
 - `entrenamiento_colab.ipynb`: monta Drive, instala, revisa CUDA y llama al motor.
+- `visualizacion.ipynb`: métricas y plots a partir de `YOLO/results/`.
 - `solar_yolo/config.py`: parámetros comunes.
 - `solar_yolo/architectures.py`: capas y congelamiento.
 - `solar_yolo/data.py`: fuentes, folds y YAML.
